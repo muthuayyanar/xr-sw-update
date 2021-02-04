@@ -1,0 +1,120 @@
+---
+- name: Install Add/Prepare/Activate IOS-XR Package/SMU on ASR9K PE91 
+  hosts: PE91-A9K
+  connection: local
+
+  vars:
+    hd: "harddisk:" 
+
+  vars:
+    filesList: "{{ lookup('file', 'rpm-md5-pkg-list.json') }}"
+    hd: "harddisk:" 
+ 
+  tasks:
+#    - name: Task  - Load variables from a file that contains just the rpm file names
+#      include_vars:
+#         file: rpm-files.yml
+ 
+    - name: Task  - Block Task to Perform config backup
+      block:
+        - name: copy running config to local harddidk
+          iosxr_command: 
+             commands: "show running | file harddisk:{{inventory_hostname}}-running-config-{{ansible_date_time.iso8601}}.cfg"
+        
+        - name: Task to  Copy image file to node via SCP
+          iosxr_command:
+            commands: 
+               - {command: "scp harddisk:{{inventory_hostname}}-running-config-{{ansible_date_time.iso8601}}.cfg {{ ansible_ssh_user }}@9.3.0.1:/home/mayyanar/", prompt: "Password: ", answer: "{{ ansible_ssh_pass }}" }
+ 
+      rescue:
+        - name: Print if config backup task fails or errors out
+          debug:
+             msg: " Backup of router config failed "
+            
+    - name: Task to  Copy image/pkg, smu files to node via SCP
+      iosxr_command:
+          commands:
+             - 
+               answer: "{{ ansible_ssh_pass }}"
+               command: "scp {{ ansible_ssh_user }}@9.3.0.1:/home/mayyanar/ASR9K-532/{{ pkg_tar_file }} harddisk:"
+               prompt: "Password: "
+
+    - name: Task to Calculate the MD5 checksum on copied files    
+      iosxr_command:
+          commands:
+             - "show md5 file /harddisk:/{{ pkg_tar_file }}"    
+      register: cmd5out
+
+    - name: Print value of cmd5out - stdout
+      debug:
+        var: cmd5out.stdout  
+
+    - name: Print value of md5 passed from the command line as extra vars
+      debug:
+        var: "{{pkg_tar_file_md5}}"
+
+    - name: Task to Compare calculated MD5 with publisged MD5 and Assert if MD5 checksum don't match on the copied files    
+      assert: { that: " pkg_tar_file_md5   == cmd5out.stdout | to_yaml | replace('\n', '') | replace('[', '') | replace(']', '')" } 
+
+    - name: Placeholder Task for pre-check 
+      iosxr_command:
+          commands:
+             - show version 
+             - show platform 
+             - show route summary
+             - show interface sum
+
+    - name: Task 5  - Check currently installed IOS-XR Package, SMU  and list packages in repo
+      iosxr_command:
+            commands: 
+               - show install active summary
+               - admin show install active summary
+               - show install committed summary
+               - admin show install committed summary
+#               - show install repo all 
+      register: show_install_output
+
+    - name: Task 6 -  Print Install show command output 
+      debug:
+        var: show_install_output.stdout_lines
+
+    - name: Task to add and activate IOS-XR Package/SMU
+      iosxr_command:
+            timeout: 60
+            commands: 
+               - admin install add source {{ hd }} tar {{ pkg_tar_file }} activate synchronous prompt-level none
+#               - "install add source harddisk\":\"  \"{{ file1_2 }}\" sync" 
+      register: install_add_output
+
+    - name: Wait 900 seconds, but only start checking after 60 seconds
+      wait_for_connection:
+        delay: 60
+        timeout: 900
+
+    - name: Task to commit IOS-XR Package, SMU 
+      iosxr_command:
+            timeout: 60
+            commands: 
+               - admin install commit
+      register: show_install_commit_output
+
+    - name: Task to print Install show install commit command output 
+      debug:
+        var: show_install_commit_output.stdout_lines
+    
+    - name: Task to Print install show commands after commit of IOS-XR Package, SMU 
+      iosxr_command:
+            timeout: 60
+            commands: 
+               - show install active summary
+               - show install commit summary
+               - admin show install active summary
+               - admin show install committed summary
+#               - show install repo all 
+               - admin show install log rev 
+      register: show_install_output
+    
+    - name: Task to print Install show install command output after commit 
+      debug:
+        var: show_install_output.stdout_lines
+
